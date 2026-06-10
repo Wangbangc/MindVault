@@ -69,6 +69,8 @@ with st.sidebar:
             episodic_memory.save(st.session_state.thread_id, summary)
             st.success(f"会话摘要已固化存入情景记忆！")
             st.info(f"摘要预览: {summary[:50]}...")
+        # 会话结束，落盘本次累积但未刷盘的检索访问统计
+        memory_manager.flush_access_stats()
 
     if st.button("🗑️ 清空当前对话流", use_container_width=True):
         st.session_state.messages = []
