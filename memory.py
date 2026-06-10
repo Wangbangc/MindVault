@@ -7,7 +7,6 @@
   - CRUD（增删改查、分类浏览）
 """
 
-import json
 import os
 import re
 import uuid
@@ -18,6 +17,7 @@ from typing import Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
+from storage import atomic_write_json, load_json
 
 
 # ==================== 情景记忆（不变）====================
@@ -54,17 +54,12 @@ class EpisodicMemory:
             "timestamp": datetime.now().isoformat(),
             "summary": summary,
         }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(path, data)
 
     def load(self, thread_id: str) -> Optional[dict]:
         """加载会话摘要"""
         path = os.path.join(self.episodes_dir, f"{thread_id}.json")
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return None
+        return load_json(path, None)
 
 
 # ==================== 记忆嵌入器 ====================
@@ -510,31 +505,15 @@ class MemoryManager:
     # ─── Persistence ───────────────────────────────────────────
 
     def _load_memories(self):
-        if os.path.exists(self._memories_path):
-            try:
-                with open(self._memories_path, "r", encoding="utf-8") as f:
-                    self._memories = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._memories = []
-        else:
-            self._memories = []
+        self._memories = load_json(self._memories_path, [])
 
     def _save_memories(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._memories_path, "w", encoding="utf-8") as f:
-            json.dump(self._memories, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._memories_path, self._memories)
 
     def _load_archive(self):
-        if os.path.exists(self._archive_path):
-            try:
-                with open(self._archive_path, "r", encoding="utf-8") as f:
-                    self._archive = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._archive = {"archived_at": None, "memories": []}
-        else:
-            self._archive = {"archived_at": None, "memories": []}
+        self._archive = load_json(self._archive_path, {"archived_at": None, "memories": []})
 
     def _save_archive(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._archive_path, "w", encoding="utf-8") as f:
-            json.dump(self._archive, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._archive_path, self._archive)
