@@ -212,9 +212,10 @@ TOOLS = [
                 "category": {
                     "type": "string",
                     "description": (
-                        "Category: 'general', 'personal', 'work', 'code', or 'project' (default: general)"
+                        "Memory category (default: general). One of: "
+                        + ", ".join(MemoryManager.FACT_TYPES)
                     ),
-                    "enum": ["general", "personal", "work", "code", "project"],
+                    "enum": list(MemoryManager.FACT_TYPES),
                     "default": "general",
                 },
             },
