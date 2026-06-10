@@ -19,6 +19,7 @@ import chromadb
 from chromadb.api.types import EmbeddingFunction, Embeddings
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
+from storage import atomic_write_json, load_json
 
 
 # ─── ChromaDB Embedding Function ─────────────────────────────
@@ -524,15 +525,12 @@ class KnowledgeBase:
 
     def _load_manifest(self):
         """Load document manifest from disk."""
-        if os.path.exists(self._manifest_path):
-            with open(self._manifest_path, "r", encoding="utf-8") as f:
-                self._manifest = json.load(f)
+        self._manifest = load_json(self._manifest_path, {})
 
     def _save_manifest(self):
         """Persist document manifest."""
         os.makedirs(os.path.dirname(self._manifest_path), exist_ok=True)
-        with open(self._manifest_path, "w", encoding="utf-8") as f:
-            json.dump(self._manifest, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._manifest_path, self._manifest)
 
     # ─── Private helpers ────────────────────────────────────────
 
