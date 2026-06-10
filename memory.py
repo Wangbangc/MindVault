@@ -134,8 +134,13 @@ class MemoryManager:
         self._archive_path = os.path.join(data_dir, "memories_archive.json")
         self._decay_threshold = decay_threshold
 
-        # LLM for fact extraction
-        self.llm = ChatOpenAI(model=llm_model, temperature=0)
+        # LLM for fact extraction — 懒初始化。
+        # 仅 extract_facts / extract_and_store 用到 LLM；纯检索 / CRUD（含
+        # MCP server 暴露的全部能力）都不需要。急切构造 ChatOpenAI 会在缺少
+        # OPENAI_API_KEY 时直接抛错，导致 MCP server 仅因一个用不到的凭证
+        # 而无法启动。延迟到首次真正调用 LLM 时再构造。
+        self._llm_model = llm_model
+        self._llm = None
 
         # Embedder
         self._embedder = MemoryEmbedder(embedding_model)
@@ -156,6 +161,17 @@ class MemoryManager:
         self.run_decay_sweep()
 
     # ─── Memory Embedding & Search ─────────────────────────────
+
+    @property
+    def llm(self) -> ChatOpenAI:
+        """懒构造的 fact-extraction LLM。
+
+        首次访问时才创建 ChatOpenAI，使纯检索 / CRUD 场景（含 MCP server）
+        无需 OPENAI_API_KEY 即可工作。
+        """
+        if self._llm is None:
+            self._llm = ChatOpenAI(model=self._llm_model, temperature=0)
+        return self._llm
 
     def _rebuild_embeddings(self):
         """为所有活跃记忆计算嵌入并缓存。"""
