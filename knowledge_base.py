@@ -562,6 +562,12 @@ class KnowledgeBase:
             chunk = text[i : i + self.chunk_size]
             if chunk.strip():
                 chunks.append(chunk.strip())
+        # A trailing fragment <= chunk_overlap carries no new content: the hard
+        # split steps by (chunk_size - chunk_overlap), so the previous chunk
+        # already covers it entirely. Drop it instead of emitting a redundant
+        # tiny chunk that would pollute the index.
+        if len(chunks) > 1 and len(chunks[-1]) <= self.chunk_overlap:
+            chunks.pop()
         return chunks
 
     def _split_by_boundaries(self, segments: list[str], joiner: str) -> list[str]:
