@@ -1,0 +1,59 @@
+# Python 缓存和编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+
+# 虚拟环境和依赖
+.venv/
+venv/
+ENV/
+
+# 敏感数据和环境变量
+.env
+.env.*
+!.env.example
+
+# 数据目录
+data/
+memory_data/
+chroma_db/
+chroma_semantic/
+episodes/
+
+# 文档目录
+docs/
+
+# 测试临时目录
+test_chroma_temp/
+test_kb_retriever/
+test_kb_retriever_empty/
+test_kb_temp/
+test_kb_temp_v2/
+test_mm_retriever/
+test_mm_retriever_empty/
+tests/
+
+# 缓存和临时文件
+.pytest_cache/
+*.log
+*.tmp
+*.bak
+
+# 畸形 pip 安装产物
+=1.10.0
+=2.31.0
+=4.12.0
+=6.2.0
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db

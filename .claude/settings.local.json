@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p ~/.claude/scripts)",
+      "Bash(rm \"c:/Users/74788/Desktop/bs/knowledge_agent/.claude/settings.json\" \"c:/Users/74788/Desktop/bs/knowledge_agent/.claude/auto_memory_hook.py\")",
+      "Bash(python ~/.claude/scripts/auto_memory_hook.py)",
+      "Bash(py ~/.claude/scripts/auto_memory_hook.py)",
+      "Bash(rm \"c:/Users/74788/Desktop/bs/knowledge_agent/.mcp.json\")",
+      "Bash(claude mcp *)",
+      "Bash(cat ~/.claude.json 2>/dev/null)",
+      "Read(//c/Users/74788/**)",
+      "Bash(rm ~/.claude/.mcp.json)",
+      "mcp__mindvault__add_to_knowledge"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\74788\\.claude",
+      "c:\\Users\\74788\\Desktop\\bs\\knowledge_agent\\.claude",
+      "c:\\Users\\74788\\Desktop\\bs\\knowledge_agent",
+      "C:\\Users\\74788"
+    ]
+  }
+}
