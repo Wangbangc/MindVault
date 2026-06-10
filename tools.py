@@ -12,9 +12,20 @@ from langchain_core.tools import tool
 
 from knowledge_base import KnowledgeBase
 
-# ─── 单例 KB ─────────────────────────────────────────────
+# ─── 共享 KB 实例 ─────────────────────────────────────────
+#
+# search_knowledge 工具必须与 agent.py / UI 操作同一个 KnowledgeBase 实例，
+# 否则 UI 上传的新文档不会刷新本模块实例的 BM25 索引，混合检索退化为纯向量；
+# 且会重复加载一份 embedding 模型。agent.py 启动时通过 set_knowledge_base
+# 注入唯一实例；未注入时（如脱离 agent 单独调用）懒加载兜底。
 
 _kb = None
+
+
+def set_knowledge_base(kb: KnowledgeBase) -> None:
+    """注入共享的 KnowledgeBase 实例（由 agent.py 在初始化时调用）。"""
+    global _kb
+    _kb = kb
 
 
 def get_knowledge_base() -> KnowledgeBase:
