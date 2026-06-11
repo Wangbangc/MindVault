@@ -7,7 +7,6 @@
   - CRUD（增删改查、分类浏览）
 """
 
-import json
 import os
 import re
 import uuid
@@ -18,6 +17,7 @@ from typing import Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
+from storage import atomic_write_json, load_json
 
 
 # ==================== 情景记忆（不变）====================
@@ -54,17 +54,12 @@ class EpisodicMemory:
             "timestamp": datetime.now().isoformat(),
             "summary": summary,
         }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(path, data)
 
     def load(self, thread_id: str) -> Optional[dict]:
         """加载会话摘要"""
         path = os.path.join(self.episodes_dir, f"{thread_id}.json")
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return None
+        return load_json(path, None)
 
 
 # ==================== 记忆嵌入器 ====================
@@ -125,7 +120,33 @@ class MemoryManager:
     既有的并发写问题，需文件锁 / SQLite 另行解决，不在本机制范围内。
     """
 
-    FACT_TYPES = ["preference", "fact", "plan", "relationship", "general"]
+    # 记忆分类的单一事实源（single source of truth）。
+    # MCP server、UI 编辑、add_memory 均以此为准，避免出现某一侧能存入、
+    # 另一侧无法识别的“幽灵分类”（曾导致 UI 编辑时 .index() 抛 ValueError）。
+    FACT_TYPES = [
+        "general",
+        "preference",
+        "fact",
+        "plan",
+        "relationship",
+        "personal",
+        "work",
+        "code",
+        "project",
+    ]
+    DEFAULT_CATEGORY = "general"
+
+    @classmethod
+    def category_index(cls, category: str) -> int:
+        """返回分类在 FACT_TYPES 中的下标；未知分类回退到默认分类的下标。
+
+        供 UI 下拉框反查使用，对历史数据 / 外部写入的未知分类做容错，
+        避免 list.index() 抛 ValueError 导致整页崩溃。
+        """
+        try:
+            return cls.FACT_TYPES.index(category)
+        except ValueError:
+            return cls.FACT_TYPES.index(cls.DEFAULT_CATEGORY)
 
     def __init__(
         self,
@@ -283,6 +304,11 @@ class MemoryManager:
         content = content.strip()
         if not content:
             return ""
+
+        # 归一化分类：未知分类回退到默认，保证 FACT_TYPES 是唯一事实源，
+        # 不让外部调用（如 MCP）写入 UI 无法识别的幽灵分类。
+        if category not in self.FACT_TYPES:
+            category = self.DEFAULT_CATEGORY
 
         # 去重检查（embedding 相似度 > 0.85 视为重复）
         if self._embedder.available and self._memory_vectors is not None and len(self._memories) > 0:
@@ -525,19 +551,11 @@ class MemoryManager:
     # ─── Persistence ───────────────────────────────────────────
 
     def _load_memories(self):
-        if os.path.exists(self._memories_path):
-            try:
-                with open(self._memories_path, "r", encoding="utf-8") as f:
-                    self._memories = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._memories = []
-        else:
-            self._memories = []
+        self._memories = load_json(self._memories_path, [])
 
     def _save_memories(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._memories_path, "w", encoding="utf-8") as f:
-            json.dump(self._memories, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._memories_path, self._memories)
         # 任何一次全量落盘都已把内存中累积的访问统计写出，重置脏计数。
         self._pending_access_writes = 0
 
@@ -559,18 +577,9 @@ class MemoryManager:
         """
         if self._pending_access_writes > 0:
             self._save_memories()
-
     def _load_archive(self):
-        if os.path.exists(self._archive_path):
-            try:
-                with open(self._archive_path, "r", encoding="utf-8") as f:
-                    self._archive = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                self._archive = {"archived_at": None, "memories": []}
-        else:
-            self._archive = {"archived_at": None, "memories": []}
+        self._archive = load_json(self._archive_path, {"archived_at": None, "memories": []})
 
     def _save_archive(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        with open(self._archive_path, "w", encoding="utf-8") as f:
-            json.dump(self._archive, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._archive_path, self._archive)

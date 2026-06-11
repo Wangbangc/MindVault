@@ -19,6 +19,7 @@ import chromadb
 from chromadb.api.types import EmbeddingFunction, Embeddings
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
+from storage import atomic_write_json, load_json
 
 
 # ─── ChromaDB Embedding Function ─────────────────────────────
@@ -296,21 +297,25 @@ class KnowledgeBase:
                 buffer = (buffer + "\n\n" + para).strip() if buffer else para
                 continue
 
-            # Buffer is full — flush it
+            # Buffer is full — flush it and carry an overlap tail forward as
+            # context for the next chunk. The tail is only ever prepended to
+            # real content, never emitted as a chunk of its own.
+            overlap = ""
             if buffer:
                 chunks.append(buffer)
-                buffer = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
+                overlap = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
 
             # Step 2: if a single paragraph exceeds chunk_size, split further
             if len(para) > self.chunk_size:
                 sub_chunks = self._split_long_text(para)
-                for sc in sub_chunks:
-                    if buffer:
-                        chunks.append(buffer)
-                        buffer = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
-                    buffer = sc
+                if sub_chunks and overlap:
+                    sub_chunks[0] = (overlap + "\n\n" + sub_chunks[0]).strip()
+                # Emit all but the last sub-chunk; keep the last as the running
+                # buffer so it can still merge with subsequent paragraphs.
+                chunks.extend(sub_chunks[:-1])
+                buffer = sub_chunks[-1] if sub_chunks else ""
             else:
-                buffer = para
+                buffer = (overlap + "\n\n" + para).strip() if overlap else para
 
         # Flush remaining buffer
         if buffer:
@@ -524,15 +529,12 @@ class KnowledgeBase:
 
     def _load_manifest(self):
         """Load document manifest from disk."""
-        if os.path.exists(self._manifest_path):
-            with open(self._manifest_path, "r", encoding="utf-8") as f:
-                self._manifest = json.load(f)
+        self._manifest = load_json(self._manifest_path, {})
 
     def _save_manifest(self):
         """Persist document manifest."""
         os.makedirs(os.path.dirname(self._manifest_path), exist_ok=True)
-        with open(self._manifest_path, "w", encoding="utf-8") as f:
-            json.dump(self._manifest, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self._manifest_path, self._manifest)
 
     # ─── Private helpers ────────────────────────────────────────
 
@@ -558,6 +560,12 @@ class KnowledgeBase:
             chunk = text[i : i + self.chunk_size]
             if chunk.strip():
                 chunks.append(chunk.strip())
+        # A trailing fragment <= chunk_overlap carries no new content: the hard
+        # split steps by (chunk_size - chunk_overlap), so the previous chunk
+        # already covers it entirely. Drop it instead of emitting a redundant
+        # tiny chunk that would pollute the index.
+        if len(chunks) > 1 and len(chunks[-1]) <= self.chunk_overlap:
+            chunks.pop()
         return chunks
 
     def _split_by_boundaries(self, segments: list[str], joiner: str) -> list[str]:

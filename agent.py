@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
@@ -18,7 +19,7 @@ from memory import MemoryManager, EpisodicMemory
 from knowledge_base import KnowledgeBase
 from retriever import UnifiedRetriever
 from context_manager import ContextManager
-from tools import TOOLS
+from tools import TOOLS, set_knowledge_base
 
 load_dotenv()
 
@@ -39,6 +40,9 @@ memory_manager = MemoryManager(
 episodic_memory = EpisodicMemory(episodes_dir="./episodes")
 
 knowledge_base = KnowledgeBase()
+
+# 注入到 tools 模块，确保 search_knowledge 工具与此处、UI 操作同一个实例
+set_knowledge_base(knowledge_base)
 
 context_mgr = ContextManager(max_turns=20)
 
@@ -68,7 +72,7 @@ SYSTEM_PROMPT = """你是一个个人知识库助手，帮助用户管理知识�
 react_agent = create_react_agent(llm, TOOLS)
 
 
-def build_messages_with_memory(state: AgentState) -> list:
+def build_messages_with_memory(state: AgentState, thread_id: str = "") -> list:
     """构建注入记忆上下文的消息列表"""
     messages = state["messages"]
 
@@ -80,6 +84,13 @@ def build_messages_with_memory(state: AgentState) -> list:
             break
 
     system_parts = [SYSTEM_PROMPT]
+
+    # 注入上次会话的情景记忆摘要（三层记忆的“情景”层——跨会话连续性）。
+    # 此前该摘要仅在 UI 显示给用户、从未进入 LLM 上下文，导致情景记忆形同虚设。
+    if thread_id:
+        episode = episodic_memory.load(thread_id)
+        if episode and episode.get("summary"):
+            system_parts.append(f"[上次会话回忆] {episode['summary']}")
 
     # 统一检索：融合知识库和记忆
     if last_user_msg:
@@ -108,9 +119,12 @@ def build_messages_with_memory(state: AgentState) -> list:
 MAX_RECURSION = 21
 
 
-def call_react(state: AgentState) -> dict:
+def call_react(state: AgentState, config: RunnableConfig = None) -> dict:
     """注入记忆后调用 ReAct Agent"""
-    full_messages = build_messages_with_memory(state)
+    thread_id = ""
+    if config:
+        thread_id = config.get("configurable", {}).get("thread_id", "") or ""
+    full_messages = build_messages_with_memory(state, thread_id=thread_id)
     result = react_agent.invoke(
         {"messages": full_messages},
         config={"recursion_limit": MAX_RECURSION},

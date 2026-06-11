@@ -292,7 +292,7 @@ with tab_mem:
                 if st.session_state.get("editing_memory_id") == mem["id"]:
                     with st.form(key=f"form_{mem['id']}"):
                         new_content = st.text_area("重写记忆事实", value=mem["content"])
-                        new_cat = st.selectbox("修正分类", MemoryManager.FACT_TYPES, index=MemoryManager.FACT_TYPES.index(mem.get("category", "general")))
+                        new_cat = st.selectbox("修正分类", MemoryManager.FACT_TYPES, index=MemoryManager.category_index(mem.get("category", "general")))
                         f_save, f_cancel = st.columns(2)
                         if f_save.form_submit_button("保存变更"):
                             memory_manager.update_memory(mem["id"], content=new_content, category=new_cat)
