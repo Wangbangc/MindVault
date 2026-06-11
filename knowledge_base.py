@@ -297,21 +297,25 @@ class KnowledgeBase:
                 buffer = (buffer + "\n\n" + para).strip() if buffer else para
                 continue
 
-            # Buffer is full — flush it
+            # Buffer is full — flush it and carry an overlap tail forward as
+            # context for the next chunk. The tail is only ever prepended to
+            # real content, never emitted as a chunk of its own.
+            overlap = ""
             if buffer:
                 chunks.append(buffer)
-                buffer = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
+                overlap = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
 
             # Step 2: if a single paragraph exceeds chunk_size, split further
             if len(para) > self.chunk_size:
                 sub_chunks = self._split_long_text(para)
-                for sc in sub_chunks:
-                    if buffer:
-                        chunks.append(buffer)
-                        buffer = buffer[-self.chunk_overlap:] if len(buffer) > self.chunk_overlap else ""
-                    buffer = sc
+                if sub_chunks and overlap:
+                    sub_chunks[0] = (overlap + "\n\n" + sub_chunks[0]).strip()
+                # Emit all but the last sub-chunk; keep the last as the running
+                # buffer so it can still merge with subsequent paragraphs.
+                chunks.extend(sub_chunks[:-1])
+                buffer = sub_chunks[-1] if sub_chunks else ""
             else:
-                buffer = para
+                buffer = (overlap + "\n\n" + para).strip() if overlap else para
 
         # Flush remaining buffer
         if buffer:
@@ -556,6 +560,12 @@ class KnowledgeBase:
             chunk = text[i : i + self.chunk_size]
             if chunk.strip():
                 chunks.append(chunk.strip())
+        # A trailing fragment <= chunk_overlap carries no new content: the hard
+        # split steps by (chunk_size - chunk_overlap), so the previous chunk
+        # already covers it entirely. Drop it instead of emitting a redundant
+        # tiny chunk that would pollute the index.
+        if len(chunks) > 1 and len(chunks[-1]) <= self.chunk_overlap:
+            chunks.pop()
         return chunks
 
     def _split_by_boundaries(self, segments: list[str], joiner: str) -> list[str]:
