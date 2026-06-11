@@ -19,7 +19,7 @@ from memory import MemoryManager, EpisodicMemory
 from knowledge_base import KnowledgeBase
 from retriever import UnifiedRetriever
 from context_manager import ContextManager
-from tools import TOOLS
+from tools import TOOLS, set_knowledge_base
 
 load_dotenv()
 
@@ -40,6 +40,9 @@ memory_manager = MemoryManager(
 episodic_memory = EpisodicMemory(episodes_dir="./episodes")
 
 knowledge_base = KnowledgeBase()
+
+# 注入到 tools 模块，确保 search_knowledge 工具与此处、UI 操作同一个实例
+set_knowledge_base(knowledge_base)
 
 context_mgr = ContextManager(max_turns=20)
 
