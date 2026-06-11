@@ -10,7 +10,8 @@
       "Bash(cat ~/.claude.json 2>/dev/null)",
       "Read(//c/Users/74788/**)",
       "Bash(rm ~/.claude/.mcp.json)",
-      "mcp__mindvault__add_to_knowledge"
+      "mcp__mindvault__add_to_knowledge",
+      "Bash(gh pr *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\74788\\.claude",
