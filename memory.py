@@ -112,6 +112,12 @@ class MemoryManager:
     存储: memories.json (活跃) + memories_archive.json (归档)
     搜索: embedding cosine + keyword Jaccard, RRF 融合
     衰减: 0.95^days_since_access + access_count bonus
+
+    访问统计（access_count/last_accessed_at）为软状态：仅用于衰减排序，
+    按阈值延迟落盘以消除搜索路径的写放大，进程退出前未刷盘的少量统计
+    丢失不影响记忆内容。如需确保最终一致，可显式调用 flush_access_stats()。
+    多进程（多个 MCP 客户端各持实例）下访问统计仍可能相互覆盖——这属于
+    既有的并发写问题，需文件锁 / SQLite 另行解决，不在本机制范围内。
     """
 
     # 记忆分类的单一事实源（single source of truth）。
@@ -165,6 +171,14 @@ class MemoryManager:
         self._memories: list[dict] = []
         self._memory_vectors: Optional[np.ndarray] = None  # (N, dim)
         self._archive: dict = {"archived_at": None, "memories": []}
+
+        # 检索访问统计的延迟落盘计数：search_memories 每次命中会 bump
+        # access_count/last_accessed_at，但不必每次都全量重写 memories.json。
+        # 累计到阈值才刷盘，把“每次搜索一次全量写”降为“每 N 次搜索一次”。
+        # 注意：必须在下方 run_decay_sweep() 之前初始化——该方法会调用
+        # _save_memories()，而后者读写 _pending_access_writes。
+        self._pending_access_writes = 0
+        self._access_flush_threshold = 20
 
         # Load data
         self._load_memories()
@@ -266,7 +280,8 @@ class MemoryManager:
             mem["access_count"] = mem.get("access_count", 0) + 1
             results.append(self._format_memory(mem, score))
 
-        self._save_memories()
+        # 访问统计已在内存更新；按阈值延迟落盘，避免每次搜索都全量重写。
+        self._mark_access_dirty()
         return results
 
     def _format_memory(self, mem: dict, score: float) -> dict:
@@ -541,7 +556,27 @@ class MemoryManager:
     def _save_memories(self):
         os.makedirs(self._data_dir, exist_ok=True)
         atomic_write_json(self._memories_path, self._memories)
+        # 任何一次全量落盘都已把内存中累积的访问统计写出，重置脏计数。
+        self._pending_access_writes = 0
 
+    def _mark_access_dirty(self):
+        """记录一次访问统计变更；累计到阈值才真正落盘。
+
+        access_count/last_accessed_at 只用于衰减排序，是“软状态”，
+        即使进程退出前丢失最后几次未刷盘的统计也不影响记忆内容本身，
+        因此可安全地按阈值批量落盘以消除搜索路径的写放大。
+        """
+        self._pending_access_writes += 1
+        if self._pending_access_writes >= self._access_flush_threshold:
+            self._save_memories()
+
+    def flush_access_stats(self):
+        """强制落盘尚未持久化的访问统计（如有）。
+
+        供应用在关闭 / 归档等时机显式调用，确保软状态最终一致。
+        """
+        if self._pending_access_writes > 0:
+            self._save_memories()
     def _load_archive(self):
         self._archive = load_json(self._archive_path, {"archived_at": None, "memories": []})
 
