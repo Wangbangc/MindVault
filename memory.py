@@ -114,7 +114,33 @@ class MemoryManager:
     衰减: 0.95^days_since_access + access_count bonus
     """
 
-    FACT_TYPES = ["preference", "fact", "plan", "relationship", "general"]
+    # 记忆分类的单一事实源（single source of truth）。
+    # MCP server、UI 编辑、add_memory 均以此为准，避免出现某一侧能存入、
+    # 另一侧无法识别的“幽灵分类”（曾导致 UI 编辑时 .index() 抛 ValueError）。
+    FACT_TYPES = [
+        "general",
+        "preference",
+        "fact",
+        "plan",
+        "relationship",
+        "personal",
+        "work",
+        "code",
+        "project",
+    ]
+    DEFAULT_CATEGORY = "general"
+
+    @classmethod
+    def category_index(cls, category: str) -> int:
+        """返回分类在 FACT_TYPES 中的下标；未知分类回退到默认分类的下标。
+
+        供 UI 下拉框反查使用，对历史数据 / 外部写入的未知分类做容错，
+        避免 list.index() 抛 ValueError 导致整页崩溃。
+        """
+        try:
+            return cls.FACT_TYPES.index(category)
+        except ValueError:
+            return cls.FACT_TYPES.index(cls.DEFAULT_CATEGORY)
 
     def __init__(
         self,
@@ -263,6 +289,11 @@ class MemoryManager:
         content = content.strip()
         if not content:
             return ""
+
+        # 归一化分类：未知分类回退到默认，保证 FACT_TYPES 是唯一事实源，
+        # 不让外部调用（如 MCP）写入 UI 无法识别的幽灵分类。
+        if category not in self.FACT_TYPES:
+            category = self.DEFAULT_CATEGORY
 
         # 去重检查（embedding 相似度 > 0.85 视为重复）
         if self._embedder.available and self._memory_vectors is not None and len(self._memories) > 0:
