@@ -15,6 +15,7 @@ import numpy as np
 from datetime import datetime, timezone
 from typing import Optional
 
+from filelock import FileLock
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
 from storage import atomic_write_json, load_json
@@ -184,6 +185,22 @@ class MemoryManager:
         # _save_memories()，而后者读写 _pending_access_writes。
         self._pending_access_writes = 0
         self._access_flush_threshold = 20
+
+        # 跨进程写锁（critical：防止多进程丢更新）。
+        # Streamlit 与 MCP server 各自构造独立的 MemoryManager，都指向同一份
+        # ./memory_data。每次写都是“整列表覆写”，且启动后从不 reload——两进程
+        # 同时运行时谁后写谁就用陈旧内存快照把对方的新记忆静默清空，不可恢复。
+        # 用一把目录级文件锁串行化所有写，并在锁内 reload-merge（见 _save_*）。
+        # filelock 是 torch/sentence-transformers 必然引入的依赖，跨平台、可重入
+        # （run_decay_sweep 外层持锁、内层 _save_* 再 acquire 不会死锁）。
+        self._write_lock = FileLock(os.path.join(data_dir, ".lock"))
+
+        # session tombstone：记录本进程主动移除过的 id，reload-merge 时据此把它们
+        # 从“磁盘有、内存无 → 当作其他进程新增并入”的复活路径里排除。
+        # _active_removed_ids：本进程 delete / 归档掉的 active id。
+        # _archive_removed_ids：本进程从归档 restore 出去的 archive id。
+        self._active_removed_ids: set[str] = set()
+        self._archive_removed_ids: set[str] = set()
 
         # Load data
         self._load_memories()
@@ -363,6 +380,9 @@ class MemoryManager:
         for i, mem in enumerate(self._memories):
             if mem["id"] == memory_id:
                 self._memories.pop(i)
+                # 记入 tombstone：否则另一进程的陈旧内存仍含此 id，
+                # 它下次 _save_memories 的 reload-merge 会把已删记忆复活。
+                self._active_removed_ids.add(memory_id)
                 self._rebuild_embeddings()
                 self._save_memories()
                 return True
@@ -419,34 +439,47 @@ class MemoryManager:
         if threshold is None:
             threshold = self._decay_threshold
 
-        now = datetime.now(timezone.utc)
-        to_archive = []
-        remaining = []
+        # 整个 sweep 在锁内完成：它同时写 memories + archive，必须作为一个
+        # 临界区，否则两次写之间被另一进程插入会留下“active 已减、archive 未增”
+        # 的跨文件不一致。filelock 可重入，内层 _save_* 再 acquire 不会死锁。
+        with self._write_lock:
+            # 先把磁盘最新 active 并入内存，避免在陈旧快照上做归档决策。
+            merged, added_remote = self._merge_active(load_json(self._memories_path, []))
+            self._memories = merged
+            if added_remote:
+                self._rebuild_embeddings()
 
-        for mem in self._memories:
-            score = self._compute_decay_score(mem, now)
-            mem["decay_score"] = round(score, 4)
-            if score < threshold:
-                to_archive.append(mem)
-            else:
-                remaining.append(mem)
+            now = datetime.now(timezone.utc)
+            to_archive = []
+            remaining = []
 
-        if to_archive:
-            archive_time = now.isoformat()
-            for mem in to_archive:
-                mem["archived_at"] = archive_time
-                mem["decay_score_at_archive"] = mem["decay_score"]
-            self._archive["archived_at"] = archive_time
-            self._archive["memories"].extend(to_archive)
-            self._memories = remaining
-            self._rebuild_embeddings()
-            self._save_memories()
-            self._save_archive()
+            for mem in self._memories:
+                score = self._compute_decay_score(mem, now)
+                mem["decay_score"] = round(score, 4)
+                if score < threshold:
+                    to_archive.append(mem)
+                else:
+                    remaining.append(mem)
 
-        return {
-            "archived_count": len(to_archive),
-            "active_count": len(self._memories),
-        }
+            if to_archive:
+                archive_time = now.isoformat()
+                for mem in to_archive:
+                    mem["archived_at"] = archive_time
+                    mem["decay_score_at_archive"] = mem["decay_score"]
+                    # 归档=从 active 移除，与 delete 同理需记入 tombstone，
+                    # 否则另一进程旧内存会把它并回 active。
+                    self._active_removed_ids.add(mem["id"])
+                self._archive["archived_at"] = archive_time
+                self._archive["memories"].extend(to_archive)
+                self._memories = remaining
+                self._rebuild_embeddings()
+                self._save_memories()
+                self._save_archive()
+
+            return {
+                "archived_count": len(to_archive),
+                "active_count": len(self._memories),
+            }
 
     def _compute_decay_score(self, mem: dict, now: datetime = None) -> float:
         """计算衰减分数。"""
@@ -476,6 +509,10 @@ class MemoryManager:
                 restored.pop("archived_at", None)
                 restored.pop("decay_score_at_archive", None)
                 self._memories.append(restored)
+                # archive 侧 tombstone：本进程把它移出归档了，别让另一进程的
+                # 陈旧 archive 内存在 _save_archive 的 reload-merge 时又并回归档。
+                # 注意不要加入 _active_removed_ids——它现在是合法的 active 新增。
+                self._archive_removed_ids.add(memory_id)
                 self._rebuild_embeddings()
                 self._save_memories()
                 self._save_archive()
@@ -566,14 +603,73 @@ class MemoryManager:
 
     # ─── Persistence ───────────────────────────────────────────
 
+    def _merge_active(self, disk: list) -> tuple[list, bool]:
+        """把磁盘上的 active 记忆并入当前内存列表，返回 (合并结果, 是否并入了新条目)。
+
+        合并规则：
+        - 两边都有的 id：以内存版为准（保护本进程刚做的修改）。
+        - 仅磁盘有的 id：视为其他进程的新增，并入——除非它在本进程的
+          _active_removed_ids 里（本进程刚删/归档掉的，不可复活）。
+        - 仅内存有的 id：保留（本进程的新增）。
+        顺序：先本进程现有条目（保持原顺序），再追加 remote-only 的新条目。
+        """
+        if not isinstance(disk, list):
+            return list(self._memories), False
+        known_ids = {m["id"] for m in self._memories if isinstance(m, dict) and "id" in m}
+        added_remote = False
+        merged = list(self._memories)
+        for mem in disk:
+            if not isinstance(mem, dict) or "id" not in mem:
+                continue
+            mid = mem["id"]
+            if mid in known_ids or mid in self._active_removed_ids:
+                continue
+            merged.append(mem)
+            added_remote = True
+        return merged, added_remote
+
+    def _merge_archive(self, disk: dict) -> dict:
+        """把磁盘归档并入当前内存归档（union by id）。
+
+        - 仅磁盘有的归档 id：并入——除非在 _archive_removed_ids 里
+          （本进程刚 restore 出去的，不可复活回归档）。
+        - 两边都有的 id：以内存版为准。
+        archived_at 取较晚者，仅作展示用。
+        """
+        mem_list = self._archive.get("memories", []) if isinstance(self._archive, dict) else []
+        if not isinstance(disk, dict):
+            return {"archived_at": self._archive.get("archived_at"), "memories": list(mem_list)}
+        known_ids = {m["id"] for m in mem_list if isinstance(m, dict) and "id" in m}
+        merged_mems = list(mem_list)
+        for mem in disk.get("memories", []):
+            if not isinstance(mem, dict) or "id" not in mem:
+                continue
+            mid = mem["id"]
+            if mid in known_ids or mid in self._archive_removed_ids:
+                continue
+            merged_mems.append(mem)
+        archived_at = max(
+            filter(None, [self._archive.get("archived_at"), disk.get("archived_at")]),
+            default=None,
+        )
+        return {"archived_at": archived_at, "memories": merged_mems}
+
     def _load_memories(self):
         self._memories = load_json(self._memories_path, [])
 
     def _save_memories(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        atomic_write_json(self._memories_path, self._memories)
-        # 任何一次全量落盘都已把内存中累积的访问统计写出，重置脏计数。
-        self._pending_access_writes = 0
+        # 锁内 reload-merge-写：先把另一进程可能已写入磁盘的新记忆并进来，
+        # 再整体落盘——否则会用本进程的陈旧快照覆盖掉对方的新增（critical）。
+        with self._write_lock:
+            merged, added_remote = self._merge_active(load_json(self._memories_path, []))
+            self._memories = merged
+            if added_remote:
+                # 仅当真有 remote-only 记忆并入时才重建嵌入（避免每次写都全量编码）。
+                self._rebuild_embeddings()
+            atomic_write_json(self._memories_path, self._memories)
+            # 任何一次全量落盘都已把内存中累积的访问统计写出，重置脏计数。
+            self._pending_access_writes = 0
 
     def _mark_access_dirty(self):
         """记录一次访问统计变更；累计到阈值才真正落盘。
@@ -598,4 +694,10 @@ class MemoryManager:
 
     def _save_archive(self):
         os.makedirs(self._data_dir, exist_ok=True)
-        atomic_write_json(self._archive_path, self._archive)
+        # 同样 reload-merge：两进程都归档时，陈旧 archive 快照整份覆写会丢掉
+        # 对方刚写入的归档记录。union by id 后再落盘。
+        with self._write_lock:
+            self._archive = self._merge_archive(load_json(
+                self._archive_path, {"archived_at": None, "memories": []}
+            ))
+            atomic_write_json(self._archive_path, self._archive)
