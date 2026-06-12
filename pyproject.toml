@@ -1,0 +1,58 @@
+[project]
+name = "mindvault"
+version = "0.1.0"
+description = "个人知识库助手:Streamlit + LangGraph + 三层记忆 + 文档 RAG + 混合检索 + MCP Server"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# 依赖声明层:用 >= 下界表达意图,精确版本交给 uv.lock 锁定。
+# 升级用 `uv lock --upgrade`(或 --upgrade-package <name>)显式重新解析,
+# 而不是手改这里的数字——区分"主动升级"与"被动漂移"。
+dependencies = [
+    # Agent 编排与 LLM
+    "langgraph>=0.2.0",
+    "langchain-openai>=0.2.0",
+    "langchain-chroma>=0.2.0",
+    "langchain-community>=0.2.0",
+    # 向量库与 embedding
+    "chromadb>=0.5.0",
+    "sentence-transformers>=2.2.0",
+    # 混合检索(BM25)
+    "rank-bm25>=0.2.2",
+    # UI
+    "streamlit>=1.38.0",
+    # 配置与并发
+    "python-dotenv>=1.0.0",
+    # 跨进程写锁:防止 Streamlit 与 MCP server 并发写 memory_data 丢更新。
+    # 实际已由 torch/sentence-transformers 间接安装,此处显式声明以免传递依赖消失。
+    "filelock>=3.12",
+    # 文档解析
+    "pymupdf>=1.24.0",
+    # Web 工具
+    "ddgs>=9.0.0",
+    "trafilatura>=1.10.0",
+    "beautifulsoup4>=4.12.0",
+    "requests>=2.31.0",
+    # MCP server
+    "mcp>=1.0.0",
+]
+
+# 可选:更好的搜索质量(Tavily 回退),需要时 `uv add --optional search tavily-python`
+# [project.optional-dependencies]
+# search = ["tavily-python>=0.3.0"]
+
+[dependency-groups]
+# 开发/测试依赖:不进生产环境(`uv sync --no-dev` 可排除)。
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]
+# 扁平布局(模块平铺在根目录,无 __init__.py / build backend),
+# 不把项目本身当可安装包,uv 只负责装依赖和管理虚拟环境。
+package = false
+
+[tool.pytest.ini_options]
+# 模块平铺在根目录,测试用 `from memory import ...` 直接导入。
+# 当前测试文件在根目录;后续若迁入 tests/ 目录,把 testpaths 改为 ["tests"]。
+addopts = "-ra -q"

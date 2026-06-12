@@ -57,27 +57,23 @@ knowledge_agent/
 
 ## 快速启动
 
-### 1. 创建虚拟环境并激活
+### 1. 安装依赖
+
+推荐用 [uv](https://docs.astral.sh/uv/):依赖与 Python 版本由 `pyproject.toml` + `uv.lock` 精确锁定,一条命令建好环境(自动按 `.python-version` 拉取解释器):
 
 ```bash
-cd c:/Users/74788/Desktop/bs/knowledge_agent
-python -m venv .venv
-
-# Git Bash
-source .venv/Scripts/activate
-# CMD
-.venv\Scripts\activate.bat
-# PowerShell
-.venv\Scripts\Activate.ps1
+uv sync
 ```
 
-### 2. 安装依赖
+> 没有 uv 时的退路(`requirements.txt` 由 `uv export` 从 lock 自动生成,已钉死版本):
+>
+> ```bash
+> python -m venv .venv
+> source .venv/bin/activate        # Windows: .venv\Scripts\activate
+> pip install -r requirements.txt
+> ```
 
-```bash
-pip install -r requirements.txt
-```
-
-### 3. 配置环境变量
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
@@ -95,20 +91,20 @@ OPENAI_MODEL=deepseek-chat
 > Embedding 使用本地模型 `BAAI/bge-small-zh-v1.5`（384 维），首次启动自动下载，无需配置。
 > 如果想用 OpenAI 作为 LLM，将 `OPENAI_BASE_URL` 改为 `https://api.openai.com/v1`，`OPENAI_MODEL` 改为 `gpt-4o-mini` 即可。
 
-### 4. 启动应用
+### 3. 启动应用
 
 ```bash
-streamlit run main.py
+uv run streamlit run main.py     # 或激活 venv 后直接 streamlit run main.py
 ```
 
 浏览器会自动打开 `http://localhost:8501`。
 
-### 5.（可选）启动 MCP Server
+### 4.(可选)启动 MCP Server
 
-MCP Server 作为独立进程运行，通过 stdio 与外部 AI 客户端通信，与 Streamlit 应用共享同一份数据：
+MCP Server 作为独立进程运行,通过 stdio 与外部 AI 客户端通信,与 Streamlit 应用共享同一份数据:
 
 ```bash
-python mcp_server.py
+uv run python mcp_server.py
 ```
 
 在 Claude Desktop 或其他 MCP 客户端的配置中添加即可使用。
